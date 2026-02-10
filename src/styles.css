@@ -1,0 +1,33 @@
+:root {
+  color-scheme: light;
+  --ink: #1a1b25;
+  --muted: #5a6270;
+  --paper: #f7f1e8;
+  --sand: #efe2cf;
+  --accent: #d65a31;
+  --accent-soft: #f5c7a9;
+  --sea: #0f4c5c;
+  --sea-soft: #c9e4e8;
+  --shadow: 0 18px 45px rgba(26, 27, 37, 0.15);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Manrope', 'Trebuchet MS', sans-serif;
+  background: radial-gradient(circle at top, #fff9f0 0%, #f3e7d6 45%, #e7d5bf 100%);
+  color: var(--ink);
+}
+
+h1, h2, h3 {
+  font-family: 'Fraunces', 'Georgia', serif;
+  margin: 0;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}

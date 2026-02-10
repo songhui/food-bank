@@ -1,0 +1,80 @@
+<div class="page">
+  <header class="hero">
+    <p class="hero-tag">Interactive food atlas</p>
+    <h1>{{ title }}</h1>
+    <p class="hero-sub">
+      Hover over a country to discover 10 well-known meals from TheMealDB catalog.
+    </p>
+  </header>
+
+  <main class="layout">
+    <section class="map-panel">
+      <div class="map-header">
+        <h2>World map</h2>
+        <span class="map-hint">Click a country to pin its dishes. Hover to preview.</span>
+      </div>
+
+      <div class="map-shell">
+        <svg
+          class="world-map"
+          [attr.viewBox]="'0 0 ' + mapWidth + ' ' + mapHeight"
+          role="img"
+          aria-label="World map"
+        >
+          <g class="map-layer" *ngIf="!loadingMap">
+            <path
+              *ngFor="let country of countries"
+              class="country"
+              [class.country--active]="selectedCountry?.name === country.name"
+              [class.country--has-meals]="country.hasMeals"
+              [attr.d]="country.path"
+              (mouseenter)="onCountryHover(country)"
+              (mouseleave)="onCountryLeave()"
+              (click)="onCountrySelect(country)"
+            ></path>
+          </g>
+          <g *ngIf="loadingMap" class="map-loading">
+            <rect x="0" y="0" [attr.width]="mapWidth" [attr.height]="mapHeight"></rect>
+            <text x="50%" y="50%">Loading map…</text>
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <aside class="info-panel">
+      <div class="info-header">
+        <div class="info-title">
+          <h2>{{ selectedCountry?.name || hoveredCountry?.name || 'Country preview' }}</h2>
+          <button *ngIf="selectedCountry" class="clear-btn" (click)="clearSelection()">Clear</button>
+        </div>
+        <p *ngIf="(selectedCountry?.area || hoveredCountry?.area)" class="area-tag">
+          TheMealDB area: {{ selectedCountry?.area || hoveredCountry?.area }}
+        </p>
+        <p *ngIf="(selectedCountry || hoveredCountry) && !(selectedCountry?.area || hoveredCountry?.area)" class="area-tag area-tag--empty">
+          No TheMealDB area match for this country.
+        </p>
+      </div>
+
+      <div *ngIf="!selectedCountry && !hoveredCountry" class="empty-state">
+        Hover a country to preview. Click to pin the dishes so you can scroll.
+      </div>
+
+      <div *ngIf="selectedCountry || hoveredCountry" class="meals-panel">
+        <div *ngIf="loadingMeals" class="loading">Loading meals…</div>
+
+        <div *ngIf="!loadingMeals && meals.length === 0 && (selectedCountry?.area || hoveredCountry?.area)" class="empty-state">
+          No meals found yet for this area.
+        </div>
+
+        <div *ngIf="!loadingMeals && meals.length > 0" class="meals-grid">
+          <article *ngFor="let meal of meals" class="meal-card">
+            <img [src]="meal.strMealThumb || placeholderImage" [alt]="meal.strMeal" loading="lazy" />
+            <div>
+              <h3>{{ meal.strMeal }}</h3>
+            </div>
+          </article>
+        </div>
+      </div>
+    </aside>
+  </main>
+</div>
