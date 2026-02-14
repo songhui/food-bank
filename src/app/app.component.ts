@@ -1,28 +1,47 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnInit } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { geoMercator, geoPath } from 'd3-geo';
-import { catchError, forkJoin, of } from 'rxjs';
+import { catchError, forkJoin, map, of, switchMap } from 'rxjs';
+import type { Observable } from 'rxjs';
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
-
-interface AreaResponse {
-  meals: Array<{ strArea: string }>;
-}
 
 interface MealSummary {
   idMeal: string;
   strMeal: string;
   strMealThumb: string;
+  mealType?: 'breakfast' | 'lunch' | 'dinner' | 'other';
 }
 
-interface WikiSummary {
-  thumbnail?: {
-    source: string;
-  };
+interface RankedMeal {
+  meal: MealSummary;
+  views: number;
+}
+
+interface AreaResponse {
+  meals: Array<{ strArea: string }>;
 }
 
 interface MealsResponse {
   meals: MealSummary[] | null;
+}
+
+interface WikidataBinding {
+  dish: { value: string };
+  dishLabel: { value: string };
+  image?: { value: string };
+  articleTitle?: { value: string };
+  mealType?: { value: string };
+}
+
+interface WikidataResponse {
+  results: {
+    bindings: WikidataBinding[];
+  };
+}
+
+interface PageviewsResponse {
+  items?: Array<{ views: number }>;
 }
 
 interface CountryPath {
@@ -51,201 +70,34 @@ export class AppComponent implements OnInit {
   hoveredCountry: CountryPath | null = null;
   selectedCountry: CountryPath | null = null;
   meals: MealSummary[] = [];
+  mealsByCategory: Record<'breakfast' | 'lunch' | 'dinner' | 'other', MealSummary[]> = {
+    breakfast: [],
+    lunch: [],
+    dinner: [],
+    other: []
+  };
+  activeCategory: 'breakfast' | 'lunch' | 'dinner' | 'other' = 'breakfast';
   loadingMeals = false;
 
-  private readonly mealDbBase = 'https://www.themealdb.com/api/json/v1/1';
   private readonly geoJsonUrl =
     'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson';
+  private readonly mealDbBase = 'https://www.themealdb.com/api/json/v1/1';
 
   private readonly areaAliases = new Map<string, string>([
-    ['China', 'Chinese'],
-    ['Japan', 'Japanese'],
-    ['India', 'Indian'],
-    ['Norway', 'Norwegian'],
-    ['France', 'French'],
-    ['Italy', 'Italian'],
+    ['United States of America', 'American'],
+    ['United States', 'American'],
+    ['United Kingdom', 'British'],
     ['South Korea', 'Korean'],
     ['Korea, South', 'Korean'],
     ['Korea, Republic of', 'Korean'],
     ['Republic of Korea', 'Korean'],
-    ['United States of America', 'American'],
-    ['United States', 'American'],
-    ['United Kingdom', 'British'],
-    ['Russia', 'Russian'],
-    ['Vietnam', 'Vietnamese'],
     ['Czechia', 'Czech'],
-    ['Czech Republic', 'Czech'],
-    ['Korea, North', 'Korean'],
-    ['North Korea', 'Korean']
+    ['Czech Republic', 'Czech']
   ]);
 
-  private areas = new Set<string>();
+  private mealsByCountry = new Map<string, MealSummary[]>();
   private mealsByArea = new Map<string, MealSummary[]>();
-  private readonly wikiTitleOverrides = new Map<string, string>([
-    ['Tteokbokki', 'Tteokbokki'],
-    ['Kimchi Jjigae', 'Kimchi-jjigae'],
-    ['Sundubu-jjigae', 'Sundubu-jjigae'],
-    ['Samgyeopsal', 'Samgyeopsal'],
-    ['Naengmyeon', 'Naengmyeon'],
-    ['Japchae', 'Japchae'],
-    ['Galbi', 'Galbi'],
-    ['Bulgogi', 'Bulgogi'],
-    ['Bibimbap', 'Bibimbap'],
-    ['Kimchi', 'Kimchi'],
-    ['Peking Duck', 'Peking duck'],
-    ['Mapo Tofu', 'Mapo tofu'],
-    ['Kung Pao Chicken', 'Kung Pao chicken'],
-    ['Hot Pot', 'Hot pot'],
-    ['Dim Sum', 'Dim sum'],
-    ['Xiaolongbao', 'Xiaolongbao'],
-    ['Chow Mein', 'Chow mein'],
-    ['Sweet and Sour Pork', 'Sweet and sour pork'],
-    ['Char Siu', 'Char siu'],
-    ['Dan Dan Noodles', 'Dan dan noodles'],
-    ['Jollof Rice', 'Jollof rice'],
-    ['Suya', 'Suya'],
-    ['Egusi Soup', 'Egusi soup'],
-    ['Pounded Yam', 'Pounded yam'],
-    ['Moi Moi', 'Moi moi'],
-    ['Injera', 'Injera'],
-    ['Doro Wat', 'Doro wat'],
-    ['Kitfo', 'Kitfo'],
-    ['Shiro', 'Shiro (food)'],
-    ['Tibs', 'Tibs'],
-    ['Tagine', 'Tagine'],
-    ['Couscous', 'Couscous'],
-    ['Pastilla', 'Pastilla'],
-    ['Harira', 'Harira'],
-    ['Rfissa', 'Rfissa'],
-    ['Bunny Chow', 'Bunny chow'],
-    ['Bobotie', 'Bobotie'],
-    ['Boerewors', 'Boerewors'],
-    ['Biltong', 'Biltong'],
-    ['Gatsby', 'Gatsby (sandwich)'],
-    ['Paella', 'Paella'],
-    ['Tortilla Espanola', 'Spanish omelette'],
-    ['Gazpacho', 'Gazpacho'],
-    ['Jamón ibérico', 'Jamón ibérico'],
-    ['Croquetas', 'Croquette'],
-    ['Pulpo a la gallega', 'Pulpo a la gallega'],
-    ['Patatas bravas', 'Patatas bravas'],
-    ['Pisto', 'Pisto'],
-    ['Churros', 'Churro'],
-    ['Bacalao a la vizcaina', 'Bacalao a la vizcaína']
-  ]);
-  private readonly fallbackMealsByCountry = new Map<string, MealSummary[]>([
-    [
-      'South Korea',
-      [
-        { idMeal: 'kr-1', strMeal: 'Bibimbap', strMealThumb: '' },
-        { idMeal: 'kr-2', strMeal: 'Kimchi', strMealThumb: '' },
-        { idMeal: 'kr-3', strMeal: 'Bulgogi', strMealThumb: '' },
-        { idMeal: 'kr-4', strMeal: 'Japchae', strMealThumb: '' },
-        { idMeal: 'kr-5', strMeal: 'Tteokbokki', strMealThumb: '' },
-        { idMeal: 'kr-6', strMeal: 'Samgyeopsal', strMealThumb: '' },
-        { idMeal: 'kr-7', strMeal: 'Galbi', strMealThumb: '' },
-        { idMeal: 'kr-8', strMeal: 'Sundubu-jjigae', strMealThumb: '' },
-        { idMeal: 'kr-9', strMeal: 'Naengmyeon', strMealThumb: '' },
-        { idMeal: 'kr-10', strMeal: 'Kimchi Jjigae', strMealThumb: '' }
-      ]
-    ],
-    ['Korea, South', []],
-    ['Republic of Korea', []],
-    ['Korea, Republic of', []],
-    [
-      'China',
-      [
-        { idMeal: 'cn-1', strMeal: 'Peking Duck', strMealThumb: '' },
-        { idMeal: 'cn-2', strMeal: 'Mapo Tofu', strMealThumb: '' },
-        { idMeal: 'cn-3', strMeal: 'Kung Pao Chicken', strMealThumb: '' },
-        { idMeal: 'cn-4', strMeal: 'Hot Pot', strMealThumb: '' },
-        { idMeal: 'cn-5', strMeal: 'Dim Sum', strMealThumb: '' },
-        { idMeal: 'cn-6', strMeal: 'Xiaolongbao', strMealThumb: '' },
-        { idMeal: 'cn-7', strMeal: 'Chow Mein', strMealThumb: '' },
-        { idMeal: 'cn-8', strMeal: 'Sweet and Sour Pork', strMealThumb: '' },
-        { idMeal: 'cn-9', strMeal: 'Char Siu', strMealThumb: '' },
-        { idMeal: 'cn-10', strMeal: 'Dan Dan Noodles', strMealThumb: '' }
-      ]
-    ],
-    ["China, People's Republic of", []],
-    ["People's Republic of China", []],
-    [
-      'Nigeria',
-      [
-        { idMeal: 'ng-1', strMeal: 'Jollof Rice', strMealThumb: '' },
-        { idMeal: 'ng-2', strMeal: 'Suya', strMealThumb: '' },
-        { idMeal: 'ng-3', strMeal: 'Egusi Soup', strMealThumb: '' },
-        { idMeal: 'ng-4', strMeal: 'Pounded Yam', strMealThumb: '' },
-        { idMeal: 'ng-5', strMeal: 'Moi Moi', strMealThumb: '' },
-        { idMeal: 'ng-6', strMeal: 'Ofada Rice', strMealThumb: '' },
-        { idMeal: 'ng-7', strMeal: 'Pepper Soup', strMealThumb: '' },
-        { idMeal: 'ng-8', strMeal: 'Akara', strMealThumb: '' },
-        { idMeal: 'ng-9', strMeal: 'Boli', strMealThumb: '' },
-        { idMeal: 'ng-10', strMeal: 'Efo Riro', strMealThumb: '' }
-      ]
-    ],
-    [
-      'Ethiopia',
-      [
-        { idMeal: 'et-1', strMeal: 'Injera', strMealThumb: '' },
-        { idMeal: 'et-2', strMeal: 'Doro Wat', strMealThumb: '' },
-        { idMeal: 'et-3', strMeal: 'Kitfo', strMealThumb: '' },
-        { idMeal: 'et-4', strMeal: 'Shiro', strMealThumb: '' },
-        { idMeal: 'et-5', strMeal: 'Tibs', strMealThumb: '' },
-        { idMeal: 'et-6', strMeal: 'Misir Wat', strMealThumb: '' },
-        { idMeal: 'et-7', strMeal: 'Gomen', strMealThumb: '' },
-        { idMeal: 'et-8', strMeal: 'Alicha', strMealThumb: '' },
-        { idMeal: 'et-9', strMeal: 'Beyaynetu', strMealThumb: '' },
-        { idMeal: 'et-10', strMeal: 'Tej', strMealThumb: '' }
-      ]
-    ],
-    [
-      'Morocco',
-      [
-        { idMeal: 'ma-1', strMeal: 'Tagine', strMealThumb: '' },
-        { idMeal: 'ma-2', strMeal: 'Couscous', strMealThumb: '' },
-        { idMeal: 'ma-3', strMeal: 'Pastilla', strMealThumb: '' },
-        { idMeal: 'ma-4', strMeal: 'Harira', strMealThumb: '' },
-        { idMeal: 'ma-5', strMeal: 'Rfissa', strMealThumb: '' },
-        { idMeal: 'ma-6', strMeal: 'Mechoui', strMealThumb: '' },
-        { idMeal: 'ma-7', strMeal: 'Zaalouk', strMealThumb: '' },
-        { idMeal: 'ma-8', strMeal: 'Bastilla', strMealThumb: '' },
-        { idMeal: 'ma-9', strMeal: 'Bissara', strMealThumb: '' },
-        { idMeal: 'ma-10', strMeal: 'Msemen', strMealThumb: '' }
-      ]
-    ],
-    [
-      'South Africa',
-      [
-        { idMeal: 'za-1', strMeal: 'Bunny Chow', strMealThumb: '' },
-        { idMeal: 'za-2', strMeal: 'Bobotie', strMealThumb: '' },
-        { idMeal: 'za-3', strMeal: 'Boerewors', strMealThumb: '' },
-        { idMeal: 'za-4', strMeal: 'Biltong', strMealThumb: '' },
-        { idMeal: 'za-5', strMeal: 'Gatsby', strMealThumb: '' },
-        { idMeal: 'za-6', strMeal: 'Braai', strMealThumb: '' },
-        { idMeal: 'za-7', strMeal: 'Pap', strMealThumb: '' },
-        { idMeal: 'za-8', strMeal: 'Chakalaka', strMealThumb: '' },
-        { idMeal: 'za-9', strMeal: 'Koeksister', strMealThumb: '' },
-        { idMeal: 'za-10', strMeal: 'Malva Pudding', strMealThumb: '' }
-      ]
-    ],
-    ['South Africa (Republic of)', []],
-    [
-      'Spain',
-      [
-        { idMeal: 'es-1', strMeal: 'Paella', strMealThumb: '' },
-        { idMeal: 'es-2', strMeal: 'Tortilla Espanola', strMealThumb: '' },
-        { idMeal: 'es-3', strMeal: 'Gazpacho', strMealThumb: '' },
-        { idMeal: 'es-4', strMeal: 'Jamón ibérico', strMealThumb: '' },
-        { idMeal: 'es-5', strMeal: 'Croquetas', strMealThumb: '' },
-        { idMeal: 'es-6', strMeal: 'Pulpo a la gallega', strMealThumb: '' },
-        { idMeal: 'es-7', strMeal: 'Patatas bravas', strMealThumb: '' },
-        { idMeal: 'es-8', strMeal: 'Pisto', strMealThumb: '' },
-        { idMeal: 'es-9', strMeal: 'Churros', strMealThumb: '' },
-        { idMeal: 'es-10', strMeal: 'Bacalao a la vizcaina', strMealThumb: '' }
-      ]
-    ]
-  ]);
+  private areas = new Set<string>();
 
   constructor(private readonly http: HttpClient) {}
 
@@ -268,65 +120,16 @@ export class AppComponent implements OnInit {
 
     this.selectedCountry = country;
     this.meals = [];
+    this.mealsByCategory = { breakfast: [], lunch: [], dinner: [], other: [] };
+    this.activeCategory = 'breakfast';
 
-    const fallbackMeals = this.getFallbackMeals(country.name);
-    const forceFallback = country.name === 'China'
-      || country.name === "China, People's Republic of"
-      || country.name === "People's Republic of China"
-      || country.name === 'Nigeria'
-      || country.name === 'Ethiopia'
-      || country.name === 'Morocco'
-      || country.name === 'South Africa'
-      || country.name === 'South Africa (Republic of)'
-      || country.name === 'Spain';
-
-    if (!country.area || forceFallback) {
-      if (fallbackMeals) {
-        this.meals = fallbackMeals;
-        this.loadFallbackImages(this.meals);
-      }
-      this.loadingMeals = false;
-      return;
-    }
-
-    this.loadingMeals = true;
-
-    const cachedMeals = this.mealsByArea.get(country.area);
-    if (cachedMeals) {
-      this.meals = cachedMeals;
-      this.loadingMeals = false;
-      return;
-    }
-
-    this.http
-      .get<MealsResponse>(`${this.mealDbBase}/filter.php?a=${encodeURIComponent(country.area)}`)
-      .subscribe({
-        next: (response) => {
-          const meals = (response.meals ?? []).slice(0, 10);
-          if (meals.length > 0) {
-            this.mealsByArea.set(country.area as string, meals);
-            this.meals = meals;
-          } else if (fallbackMeals) {
-            this.meals = fallbackMeals;
-            this.loadFallbackImages(this.meals);
-          } else {
-            this.meals = [];
-          }
-          this.loadingMeals = false;
-        },
-        error: () => {
-          this.meals = fallbackMeals ?? [];
-          if (this.meals.length > 0) {
-            this.loadFallbackImages(this.meals);
-          }
-          this.loadingMeals = false;
-        }
-      });
+    this.fetchMealsForCountry(country.name, country.area);
   }
 
   clearSelection(): void {
     this.selectedCountry = null;
     this.meals = [];
+    this.mealsByCategory = { breakfast: [], lunch: [], dinner: [], other: [] };
     this.loadingMeals = false;
   }
 
@@ -334,7 +137,9 @@ export class AppComponent implements OnInit {
     this.loadingMap = true;
 
     forkJoin({
-      areas: this.http.get<AreaResponse>(`${this.mealDbBase}/list.php?a=list`),
+      areas: this.http.get<AreaResponse>(`${this.mealDbBase}/list.php?a=list`).pipe(
+        catchError(() => of({ meals: [] }))
+      ),
       geojson: this.http.get<FeatureCollection<Geometry>>(this.geoJsonUrl)
     }).subscribe({
       next: ({ areas, geojson }) => {
@@ -357,12 +162,233 @@ export class AppComponent implements OnInit {
       .map((feature) => {
         const name = feature.properties?.name ?? 'Unknown';
         const area = this.resolveArea(name);
-        const hasMeals = !!area || this.hasFallbackMealsForCountry(name);
+        const hasMeals = true;
         const path = pathGenerator(feature as any) ?? '';
         return { name, area, path, hasMeals };
       })
       .filter((country) => country.path.length > 0)
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  private fetchMealsForCountry(countryName: string, area: string | null): void {
+    if (!area) {
+      this.fetchWikidataMeals(countryName, []);
+      return;
+    }
+
+    const cachedMeals = this.mealsByArea.get(area);
+    if (cachedMeals) {
+      this.fetchWikidataMeals(countryName, cachedMeals);
+      return;
+    }
+
+    this.loadingMeals = true;
+
+    this.http
+      .get<MealsResponse>(`${this.mealDbBase}/filter.php?a=${encodeURIComponent(area)}`)
+      .subscribe({
+        next: (response) => {
+          const meals = (response.meals ?? [])
+            .slice(0, 60)
+            .map((meal) => ({ ...meal, mealType: 'other' as const }));
+          this.mealsByArea.set(area, meals);
+          this.fetchWikidataMeals(countryName, meals);
+        },
+        error: () => {
+          this.fetchWikidataMeals(countryName, []);
+        }
+      });
+  }
+
+  private fetchWikidataMeals(countryName: string, fallbackMeals: MealSummary[]): void {
+    const cachedMeals = this.mealsByCountry.get(countryName);
+    if (cachedMeals) {
+      this.meals = cachedMeals;
+      this.mealsByCategory = this.categorizeRankedMeals(
+        cachedMeals.map((meal) => ({ meal, views: 0 }))
+      );
+      this.activeCategory = this.pickDefaultCategory(this.mealsByCategory);
+      this.loadingMeals = false;
+      return;
+    }
+
+    this.loadingMeals = true;
+
+    const query = `
+      SELECT ?dish ?dishLabel
+        (SAMPLE(?image) AS ?image)
+        (SAMPLE(?articleTitle) AS ?articleTitle)
+        (SAMPLE(?mealType) AS ?mealType)
+      WHERE {
+        ?country rdfs:label "${countryName}"@en.
+        {
+          ?dish wdt:P495 ?country.
+        }
+        UNION
+        {
+          ?dish wdt:P2012 ?cuisine.
+          ?cuisine (wdt:P495|wdt:P17) ?country.
+        }
+        ?dish wdt:P31/wdt:P279* ?type.
+        VALUES ?type { wd:Q2095 wd:Q19861951 }
+        OPTIONAL {
+          ?dish wdt:P31/wdt:P279* ?mealType.
+          VALUES ?mealType { wd:Q80973 wd:Q12896105 wd:Q657221 wd:Q568285 }
+        }
+        OPTIONAL { ?dish wdt:P18 ?image. }
+        OPTIONAL {
+          ?article schema:about ?dish;
+            schema:inLanguage "en";
+            schema:isPartOf <https://en.wikipedia.org/>;
+            schema:name ?articleTitle.
+        }
+        SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+      }
+      GROUP BY ?dish ?dishLabel
+      LIMIT 120
+    `;
+
+    const params = new HttpParams().set('format', 'json').set('query', query);
+
+    this.http
+      .get<WikidataResponse>('https://query.wikidata.org/sparql', { params })
+      .pipe(
+        switchMap((response) => this.rankMealsByPageviews(response.results.bindings)),
+        catchError(() => of([] as RankedMeal[]))
+      )
+      .subscribe((rankedMeals) => {
+        const mergedRanked = this.mergeRankedMeals(rankedMeals, fallbackMeals);
+        const categories = this.categorizeRankedMeals(mergedRanked);
+        const resolvedMeals = mergedRanked.map((item) => item.meal);
+        if (resolvedMeals.length > 0) {
+          this.mealsByCountry.set(countryName, resolvedMeals);
+        }
+        this.meals = resolvedMeals;
+        this.mealsByCategory = categories;
+        this.activeCategory = this.pickDefaultCategory(this.mealsByCategory);
+        this.loadingMeals = false;
+      });
+  }
+
+  private rankMealsByPageviews(bindings: WikidataBinding[]): Observable<RankedMeal[]> {
+    if (bindings.length === 0) {
+      return of([] as RankedMeal[]);
+    }
+
+    const { start, end } = this.getPageviewDateRange();
+    const entries = bindings.map((binding, index) => {
+      const title = binding.articleTitle?.value ?? '';
+      const safeTitle = title.replace(/ /g, '_');
+      if (!safeTitle) {
+        return of({
+          meal: this.toMealSummary(binding, index),
+          views: 0
+        });
+      }
+
+      const url = `https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/all-agents/${encodeURIComponent(
+        safeTitle
+      )}/daily/${start}/${end}`;
+
+      return this.http.get<PageviewsResponse>(url).pipe(
+        map((response) => ({
+          meal: this.toMealSummary(binding, index),
+          views: (response.items ?? []).reduce((sum, item) => sum + item.views, 0)
+        })),
+        catchError(() =>
+          of({
+            meal: this.toMealSummary(binding, index),
+            views: 0
+          })
+        )
+      );
+    });
+
+    return forkJoin(entries).pipe(
+      map((ranked) => {
+        const sorted = ranked.sort((a, b) => b.views - a.views);
+        const seen = new Set<string>();
+        const unique: RankedMeal[] = [];
+
+        for (const entry of sorted) {
+          const key = entry.meal.strMeal.trim().toLowerCase();
+          if (!key || seen.has(key)) {
+            continue;
+          }
+          seen.add(key);
+          unique.push(entry);
+        }
+
+        return unique;
+      })
+    );
+  }
+
+  private mergeRankedMeals(rankedMeals: RankedMeal[], fallbackMeals: MealSummary[]): RankedMeal[] {
+    const merged: RankedMeal[] = [...rankedMeals];
+    const seen = new Set(rankedMeals.map((item) => item.meal.strMeal.trim().toLowerCase()));
+
+    for (const meal of fallbackMeals) {
+      const key = meal.strMeal.trim().toLowerCase();
+      if (!key || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      merged.push({ meal, views: 0 });
+    }
+
+    return merged;
+  }
+
+  setActiveCategory(category: 'breakfast' | 'lunch' | 'dinner' | 'other'): void {
+    this.activeCategory = category;
+  }
+
+  private categorizeRankedMeals(
+    rankedMeals: RankedMeal[]
+  ): Record<'breakfast' | 'lunch' | 'dinner' | 'other', MealSummary[]> {
+    const categories: Record<'breakfast' | 'lunch' | 'dinner' | 'other', RankedMeal[]> = {
+      breakfast: [],
+      lunch: [],
+      dinner: [],
+      other: []
+    };
+
+    for (const item of rankedMeals) {
+      const category = this.pickCategory(item.meal);
+      categories[category].push(item);
+    }
+
+    return {
+      breakfast: categories.breakfast.sort((a, b) => b.views - a.views).slice(0, 10).map((item) => item.meal),
+      lunch: categories.lunch.sort((a, b) => b.views - a.views).slice(0, 10).map((item) => item.meal),
+      dinner: categories.dinner.sort((a, b) => b.views - a.views).slice(0, 10).map((item) => item.meal),
+      other: categories.other.sort((a, b) => b.views - a.views).slice(0, 10).map((item) => item.meal)
+    };
+  }
+
+  private pickDefaultCategory(
+    categories: Record<'breakfast' | 'lunch' | 'dinner' | 'other', MealSummary[]>
+  ): 'breakfast' | 'lunch' | 'dinner' | 'other' {
+    if (categories.breakfast.length > 0) {
+      return 'breakfast';
+    }
+    if (categories.lunch.length > 0) {
+      return 'lunch';
+    }
+    if (categories.dinner.length > 0) {
+      return 'dinner';
+    }
+    return 'other';
+  }
+
+  private toMealSummary(binding: WikidataBinding, index: number): MealSummary {
+    return {
+      idMeal: binding.dish.value.split('/').pop() ?? `wd-${index}`,
+      strMeal: binding.dishLabel.value,
+      strMealThumb: binding.image?.value ?? '',
+      mealType: this.resolveMealType(binding.mealType?.value)
+    };
   }
 
   private resolveArea(countryName: string): string | null {
@@ -371,48 +397,110 @@ export class AppComponent implements OnInit {
     }
 
     const alias = this.areaAliases.get(countryName);
-    if (alias) {
+    if (alias && this.areas.has(alias)) {
       return alias;
     }
 
     return null;
   }
 
-  private getFallbackMeals(countryName: string): MealSummary[] | null {
-    if (this.fallbackMealsByCountry.has(countryName)) {
-      const fallback = this.fallbackMealsByCountry.get(countryName);
-      if (fallback && fallback.length > 0) {
-        return fallback;
-      }
-      return this.fallbackMealsByCountry.get('South Korea') ?? null;
+  private getPageviewDateRange(): { start: string; end: string } {
+    const endDate = new Date();
+    endDate.setUTCDate(endDate.getUTCDate() - 1);
+    const startDate = new Date(endDate);
+    startDate.setUTCDate(startDate.getUTCDate() - 364);
+    return {
+      start: this.formatPageviewDate(startDate),
+      end: this.formatPageviewDate(endDate)
+    };
+  }
+
+  private formatPageviewDate(date: Date): string {
+    const y = date.getUTCFullYear();
+    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(date.getUTCDate()).padStart(2, '0');
+    return `${y}${m}${d}00`;
+  }
+
+  private resolveMealType(mealTypeUri?: string): 'breakfast' | 'lunch' | 'dinner' | 'other' {
+    switch (mealTypeUri) {
+      case 'http://www.wikidata.org/entity/Q80973':
+        return 'breakfast';
+      case 'http://www.wikidata.org/entity/Q12896105':
+        return 'lunch';
+      case 'http://www.wikidata.org/entity/Q657221':
+      case 'http://www.wikidata.org/entity/Q568285':
+        return 'dinner';
+      default:
+        return 'other';
+    }
+  }
+
+  private pickCategory(meal: MealSummary): 'breakfast' | 'lunch' | 'dinner' | 'other' {
+    if (meal.mealType && meal.mealType !== 'other') {
+      return meal.mealType;
     }
 
-    return null;
-  }
+    const label = meal.strMeal.toLowerCase();
+    const breakfastKeywords = [
+      'breakfast',
+      'omelette',
+      'omelet',
+      'pancake',
+      'waffle',
+      'porridge',
+      'congee',
+      'toast',
+      'cereal',
+      'muffin',
+      'croissant',
+      'bagel',
+      'granola',
+      'yogurt',
+      'coffee',
+      'tea',
+      'eggs',
+      'bacon',
+      'sausage'
+    ];
+    const dinnerKeywords = [
+      'stew',
+      'curry',
+      'roast',
+      'braise',
+      'grill',
+      'steak',
+      'bbq',
+      'barbecue',
+      'hot pot',
+      'tandoori',
+      'biryani',
+      'risotto',
+      'ragù',
+      'ragu',
+      'kebab',
+      'tagine',
+      'casserole',
+      'noodles',
+      'ramen',
+      'pho',
+      'soup',
+      'chowder',
+      'goulash',
+      'duck',
+      'beef',
+      'pork',
+      'lamb'
+    ];
 
-  private hasFallbackMealsForCountry(countryName: string): boolean {
-    const fallback = this.getFallbackMeals(countryName);
-    return !!fallback && fallback.length > 0;
-  }
+    if (breakfastKeywords.some((word) => label.includes(word))) {
+      return 'breakfast';
+    }
 
-  private loadFallbackImages(meals: MealSummary[]): void {
-    const requests = meals.map((meal) => {
-      if (meal.strMealThumb) {
-        return of(null);
-      }
+    if (dinnerKeywords.some((word) => label.includes(word))) {
+      return 'dinner';
+    }
 
-      const wikiTitle = this.wikiTitleOverrides.get(meal.strMeal) ?? meal.strMeal;
-      const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(wikiTitle)}`;
-      return this.http.get<WikiSummary>(url).pipe(catchError(() => of(null)));
-    });
-
-    forkJoin(requests).subscribe((responses) => {
-      responses.forEach((summary, index) => {
-        const thumb = summary?.thumbnail?.source;
-        if (thumb) {
-          meals[index].strMealThumb = thumb;
-        }
-      });
-    });
+    return 'lunch';
   }
 }

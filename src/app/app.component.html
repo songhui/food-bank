@@ -47,11 +47,8 @@
           <h2>{{ selectedCountry?.name || hoveredCountry?.name || 'Country preview' }}</h2>
           <button *ngIf="selectedCountry" class="clear-btn" (click)="clearSelection()">Clear</button>
         </div>
-        <p *ngIf="(selectedCountry?.area || hoveredCountry?.area)" class="area-tag">
-          TheMealDB area: {{ selectedCountry?.area || hoveredCountry?.area }}
-        </p>
-        <p *ngIf="(selectedCountry || hoveredCountry) && !(selectedCountry?.area || hoveredCountry?.area)" class="area-tag area-tag--empty">
-          No TheMealDB area match for this country.
+        <p *ngIf="selectedCountry || hoveredCountry" class="area-tag">
+          Data source: Wikidata + Wikipedia pageviews
         </p>
       </div>
 
@@ -62,12 +59,47 @@
       <div *ngIf="selectedCountry || hoveredCountry" class="meals-panel">
         <div *ngIf="loadingMeals" class="loading">Loading meals…</div>
 
-        <div *ngIf="!loadingMeals && meals.length === 0 && (selectedCountry?.area || hoveredCountry?.area)" class="empty-state">
-          No meals found yet for this area.
+        <div *ngIf="!loadingMeals && meals.length === 0" class="empty-state">
+          No dishes found yet for this country.
+        </div>
+
+        <div *ngIf="!loadingMeals && meals.length > 0" class="tabs">
+          <button
+            class="tab"
+            [class.tab--active]="activeCategory === 'breakfast'"
+            (click)="setActiveCategory('breakfast')"
+          >
+            Breakfast
+          </button>
+          <button
+            class="tab"
+            [class.tab--active]="activeCategory === 'lunch'"
+            (click)="setActiveCategory('lunch')"
+          >
+            Lunch
+          </button>
+          <button
+            class="tab"
+            [class.tab--active]="activeCategory === 'dinner'"
+            (click)="setActiveCategory('dinner')"
+          >
+            Dinner
+          </button>
+          <button
+            class="tab"
+            [class.tab--active]="activeCategory === 'other'"
+            (click)="setActiveCategory('other')"
+          >
+            Other
+          </button>
+        </div>
+
+        <div *ngIf="!loadingMeals && meals.length > 0 && mealsByCategory[activeCategory].length === 0" class="empty-state">
+          No dishes found for this category.
         </div>
 
         <div *ngIf="!loadingMeals && meals.length > 0" class="meals-grid">
-          <article *ngFor="let meal of meals" class="meal-card">
+          <article *ngFor="let meal of mealsByCategory[activeCategory]" class="meal-card">
             <img [src]="meal.strMealThumb || placeholderImage" [alt]="meal.strMeal" loading="lazy" />
             <div>
               <h3>{{ meal.strMeal }}</h3>
